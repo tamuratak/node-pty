@@ -10,8 +10,10 @@ var ptyProcess = pty.spawn('zsh', [], {
 
 
 ptyProcess.onData((data) => {
-  console.log(data);
-  process.exit(0);
+  console.log(JSON.stringify(data));
+//  process.stdout.write(data);
+//  console.log(data);
+//  process.exit(0);
 });
 
 

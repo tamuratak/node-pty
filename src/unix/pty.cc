@@ -71,9 +71,7 @@
 
 /* environ for execvpe */
 /* node/src/node_child_process.cc */
-#if !defined(__APPLE__)
 extern char **environ;
-#endif
 
 #if defined(__APPLE__)
 extern "C" {
@@ -142,15 +140,6 @@ pty_after_waitpid(uv_async_t *);
 static void
 pty_after_close(uv_handle_t *);
 
-#if defined(__APPLE__) || defined(__OpenBSD__)
-static void
-pty_posix_spawn(char** argv, char** env,
-                const struct termios *termp,
-                const struct winsize *winp,
-                int* master,
-                pid_t* pid,
-                int* err);
-#endif
 
 NAN_METHOD(PtyFork) {
   Nan::HandleScope scope;
@@ -197,11 +186,9 @@ NAN_METHOD(PtyFork) {
   winp.ws_xpixel = 0;
   winp.ws_ypixel = 0;
 
-#if !defined(__APPLE__)
   // uid / gid
   int uid = info[6]->IntegerValue(Nan::GetCurrentContext()).FromJust();
   int gid = info[7]->IntegerValue(Nan::GetCurrentContext()).FromJust();
-#endif
 
   // termios
   struct termios t = termios();
@@ -246,30 +233,6 @@ NAN_METHOD(PtyFork) {
 
   pid_t pid;
   int master;
-#if defined(__APPLE__)
-  int argc = argv_->Length();
-  int argl = argc + 4;
-  char **argv = new char*[argl];
-  argv[0] = strdup(*helper_path);
-  argv[1] = strdup(*cwd_);
-  argv[2] = strdup(*file);
-  argv[argl - 1] = NULL;
-  for (int i = 0; i < argc; i++) {
-    Nan::Utf8String arg(Nan::Get(argv_, i).ToLocalChecked());
-    argv[i + 3] = strdup(*arg);
-  }
-
-  int err = -1;
-  pty_posix_spawn(argv, env, term, &winp, &master, &pid, &err);
-  if (err != 0) {
-    Nan::ThrowError("posix_spawnp failed.");
-    goto done;
-  }
-  if (pty_nonblock(master) == -1) {
-    Nan::ThrowError("Could not set master fd to nonblocking.");
-    goto done;
-  }
-#else
   int argc = argv_->Length();
   int argl = argc + 2;
   char **argv = new char*[argl];
@@ -350,7 +313,6 @@ NAN_METHOD(PtyFork) {
         goto done;
       }
   }
-#endif
 
   {
     v8::Local<v8::Object> obj = Nan::New<v8::Object>();
@@ -530,7 +492,7 @@ pty_waitpid(void *data) {
   // Based on
   // https://source.chromium.org/chromium/chromium/src/+/main:base/process/kill_mac.cc;l=35-69?
   int kq = HANDLE_EINTR(kqueue());
-  struct kevent change = {0};
+  struct kevent change = {};
   EV_SET(&change, baton->pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
   ret = HANDLE_EINTR(kevent(kq, &change, 1, NULL, 0, NULL));
   if (ret == -1) {
@@ -550,7 +512,7 @@ pty_waitpid(void *data) {
       }
     }
   } else {
-    struct kevent event = {0};
+    struct kevent event = {};
     ret = HANDLE_EINTR(kevent(kq, NULL, 0, &event, 1, NULL));
     if (ret == 1) {
       if ((event.fflags & NOTE_EXIT) &&
@@ -706,107 +668,6 @@ pty_getproc(int fd, char *tty) {
   return NULL;
 }
 
-#endif
-
-#if defined(__APPLE__)
-static void
-pty_posix_spawn(char** argv, char** env,
-                const struct termios *termp,
-                const struct winsize *winp,
-                int* master,
-                pid_t* pid,
-                int* err) {
-  int low_fds[3];
-  size_t count = 0;
-
-  for (; count < 3; count++) {
-    low_fds[count] = posix_openpt(O_RDWR);
-    if (low_fds[count] >= STDERR_FILENO)
-      break;
-  }
-
-  int flags = POSIX_SPAWN_CLOEXEC_DEFAULT |
-              POSIX_SPAWN_SETSIGDEF |
-              POSIX_SPAWN_SETSIGMASK |
-              POSIX_SPAWN_SETSID;
-  *master = posix_openpt(O_RDWR);
-  if (*master == -1) {
-    return;
-  }
-
-  int res = grantpt(*master) || unlockpt(*master);
-  if (res == -1) {
-    return;
-  }
-
-  // Use TIOCPTYGNAME instead of ptsname() to avoid threading problems.
-  int slave;
-  char slave_pty_name[128];
-  res = ioctl(*master, TIOCPTYGNAME, slave_pty_name);
-  if (res == -1) {
-    return;
-  }
-
-  slave = open(slave_pty_name, O_RDWR | O_NOCTTY);
-  if (slave == -1) {
-    return;
-  }
-
-  if (termp) {
-    res = tcsetattr(slave, TCSANOW, termp);
-    if (res == -1) {
-      return;
-    };
-  }
-
-  if (winp) {
-    res = ioctl(slave, TIOCSWINSZ, winp);
-    if (res == -1) {
-      return;
-    }
-  }
-
-  posix_spawn_file_actions_t acts;
-  posix_spawn_file_actions_init(&acts);
-  posix_spawn_file_actions_adddup2(&acts, slave, STDIN_FILENO);
-  posix_spawn_file_actions_adddup2(&acts, slave, STDOUT_FILENO);
-  posix_spawn_file_actions_adddup2(&acts, slave, STDERR_FILENO);
-  posix_spawn_file_actions_addclose(&acts, slave);
-  posix_spawn_file_actions_addclose(&acts, *master);
-
-  posix_spawnattr_t attrs;
-  posix_spawnattr_init(&attrs);
-  *err = posix_spawnattr_setflags(&attrs, flags);
-  if (*err != 0) {
-    goto done;
-  }
-
-  sigset_t signal_set;
-  /* Reset all signal the child to their default behavior */
-  sigfillset(&signal_set);
-  *err = posix_spawnattr_setsigdefault(&attrs, &signal_set);
-  if (*err != 0) {
-    goto done;
-  }
-
-  /* Reset the signal mask for all signals */
-  sigemptyset(&signal_set);
-  *err = posix_spawnattr_setsigmask(&attrs, &signal_set);
-  if (*err != 0) {
-    goto done;
-  }
-
-  do
-    *err = posix_spawn(pid, argv[0], &acts, &attrs, argv, env);
-  while (*err == EINTR);
-done:
-  posix_spawn_file_actions_destroy(&acts);
-  posix_spawnattr_destroy(&attrs);
-
-  for (; count > 0; count--) {
-    close(low_fds[count]);
-  }
-}
 #endif
 
 /**

@@ -530,7 +530,7 @@ pty_waitpid(void *data) {
   // Based on
   // https://source.chromium.org/chromium/chromium/src/+/main:base/process/kill_mac.cc;l=35-69?
   int kq = HANDLE_EINTR(kqueue());
-  struct kevent change = {0};
+  struct kevent change = {};
   EV_SET(&change, baton->pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
   ret = HANDLE_EINTR(kevent(kq, &change, 1, NULL, 0, NULL));
   if (ret == -1) {
@@ -550,7 +550,7 @@ pty_waitpid(void *data) {
       }
     }
   } else {
-    struct kevent event = {0};
+    struct kevent event = {};
     ret = HANDLE_EINTR(kevent(kq, NULL, 0, &event, 1, NULL));
     if (ret == 1) {
       if ((event.fflags & NOTE_EXIT) &&

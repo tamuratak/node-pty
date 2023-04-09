@@ -142,7 +142,7 @@ pty_after_waitpid(uv_async_t *);
 static void
 pty_after_close(uv_handle_t *);
 
-#if defined(__APPLE__) || defined(__OpenBSD__)
+#if defined(__APPLE__)
 static void
 pty_posix_spawn(char** argv, char** env,
                 const struct termios *termp,
